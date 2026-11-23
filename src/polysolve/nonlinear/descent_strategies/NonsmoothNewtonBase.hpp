@@ -97,7 +97,6 @@ namespace polysolve::nonlinear
             bool row_major_q = false;               ///< model/row_major_q
             std::string reduced_matrix = "per_block"; ///< reduced_matrix/mode: per_block, auto or merged
             int merged_min_blocks = 2000;           ///< reduced_matrix/merged_min_blocks
-            bool reduced_matrix_check = false;      ///< reduced_matrix/check
             std::string basis_repair = "off";       ///< basis_repair/mode: off or r_ad
             int basis_repair_max_rounds = 3;        ///< basis_repair/max_rounds
             int basis_repair_radius = 2;            ///< basis_repair/radius
@@ -125,6 +124,7 @@ namespace polysolve::nonlinear
             long jacobian_floor_hits = 0, jacobian_bound_hits = 0; ///< paths ended or first steps shortened by the Jacobian floor / bound
             long promotions = 0;                                   ///< first layer: units found behind a cut
             long rr_calls = 0, rr_after_promotion = 0;       ///< re-reads at accepted inner points / after a restart
+            long repair_rounds = 0, repaired = 0;                   ///< rounds of the repair of B, factorizations that the repair made succeed
             long restart_cont = 0;                                 ///< restarts that kept the cumulative model value
             long select_calls = 0, selected = 0;            ///< selection at the start of an outer iteration: calls, units made exact
         };

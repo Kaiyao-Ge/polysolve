@@ -11,6 +11,7 @@ namespace polysolve::nonlinear::line_search
     {
         delta_relative_tolerance = params.at(
             "/line_search/RobustArmijo/delta_relative_tolerance"_json_pointer);
+        gradient_norm_accept = params.at("/line_search/RobustArmijo/gradient_norm_accept"_json_pointer);
     }
 
     bool RobustArmijo::criteria(
@@ -39,6 +40,10 @@ namespace polysolve::nonlinear::line_search
             //std::cout << "armijo crit: " << this->armijo_criteria << std::endl;
 
             if (deltaE_approx + abs_eps_est <= step_size * this->armijo_criteria)
+                return true;
+
+            if (gradient_norm_accept && deltaE_approx < 0
+                && objFunc.grad_norm(new_grad, this->norm_type) < objFunc.grad_norm(old_grad, this->norm_type))
                 return true;
         }
 

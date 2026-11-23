@@ -7,6 +7,8 @@
 #include <polysolve/Utils.hpp>
 #include <polysolve/Types.hpp>
 #include <polysolve/nonlinear/NonsmoothPorts.hpp>
+#include <polysolve/linear/Solver.hpp>
+#include <polysolve/nonlinear/descent_strategies/nonsmooth/ReducedMatrix.hpp>
 
 #include <nonlinear-solver-spec.hpp>
 
@@ -24,6 +26,7 @@
 #include <cstring>
 #include <limits>
 #include <random>
+#include <set>
 #include <vector>
 
 #ifdef POLYSOLVE_WITH_TBB
@@ -214,7 +217,6 @@ TEST_CASE("nonsmooth-newton-options", "[solver][nonsmooth]")
         CHECK(ds.row_major_q == d.row_major_q);
         CHECK(ds.reduced_matrix == d.reduced_matrix);
         CHECK(ds.merged_min_blocks == d.merged_min_blocks);
-        CHECK(ds.reduced_matrix_check == d.reduced_matrix_check);
         CHECK(ds.basis_repair == d.basis_repair);
         CHECK(ds.basis_repair_max_rounds == d.basis_repair_max_rounds);
         CHECK(ds.basis_repair_radius == d.basis_repair_radius);
@@ -263,8 +265,9 @@ TEST_CASE("nonsmooth-newton-options", "[solver][nonsmooth]")
         CHECK(blind.exact_gate_on());
         CHECK(!NonsmoothNewton::Options::from_json(bad({{"selection", "blind"}, {"reread", {{"enabled", "off"}}}})).reread_on());
     }
-    CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"reduced_matrix", {{"mode", "merged"}}}})));
-    CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"basis_repair", {{"mode", "r_ad"}}}})));
+    CHECK(NonsmoothNewton::Options::from_json(bad({{"basis_repair", {{"mode", "r_ad"}, {"max_rounds", 5}}}})).basis_repair == "r_ad");
+    CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"basis_repair", {{"mode", "bogus"}}}})));
+    CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"basis_repair", {{"mode", "r_ad"}, {"max_rounds", 0}}}})));
     CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"path", {{"always", "yes"}}}})));
     CHECK(NonsmoothNewton::Options::from_json(bad({{"selection", "blind"}})).selection == "blind");
 }
@@ -1014,4 +1017,227 @@ TEST_CASE("nonsmooth-newton-jgate", "[solver][nonsmooth]")
     CHECK(g.applied == -1);
     CHECK(g.score() == 1);
     CHECK(g.enabled);
+}
+
+namespace
+{
+    /// random local blocks over n reduced dofs: index lists of m <= 12 entries (some fixed: -1), symmetric Hessians
+    NonsmoothEval random_blocks(const int n, const int nb, std::mt19937 &rng, const int distinct = 0)
+    {
+        std::uniform_int_distribution<int> dof(0, n - 1), size(3, 12), fixed(0, 9);
+        std::normal_distribution<double> nd;
+        NonsmoothEval c;
+        c.local = true;
+        c.deriv = true;
+        std::vector<HessianBlock> pool;
+        for (int b = 0; b < nb; ++b)
+        {
+            if (distinct > 0 && int(pool.size()) >= distinct)
+            {
+                // a block of the pool again (the same index list), other values
+                HessianBlock hb = pool[size_t(rng() % pool.size())];
+                Eigen::MatrixXd R = Eigen::MatrixXd::NullaryExpr(hb.size, hb.size, [&]() { return nd(rng); });
+                hb.H.topLeftCorner(hb.size, hb.size) = R + R.transpose();
+                c.blocks.push_back(hb);
+                continue;
+            }
+            HessianBlock hb;
+            hb.size = size(rng);
+            hb.indices.fill(-1);
+            for (int i = 0; i < hb.size; ++i)
+                hb.indices[i] = fixed(rng) == 0 ? -1 : dof(rng);
+            Eigen::MatrixXd R = Eigen::MatrixXd::NullaryExpr(hb.size, hb.size, [&]() { return nd(rng); });
+            hb.H.setZero();
+            hb.H.topLeftCorner(hb.size, hb.size) = R + R.transpose();
+            c.blocks.push_back(hb);
+            pool.push_back(hb);
+        }
+        return c;
+    }
+
+    /// e_S = |A - A_ref|_F / S, S = |G|_F + sum_b |H_b|_F |L_b Q|_F^2
+    double e_S(const Eigen::MatrixXd &A, const Eigen::MatrixXd &Aref, const Eigen::MatrixXd &G, const NonsmoothEval &c, const Eigen::MatrixXd &Q)
+    {
+        double S = G.norm();
+        for (const auto &b : c.blocks)
+        {
+            Eigen::MatrixXd LQ = Eigen::MatrixXd::Zero(b.size, Q.cols());
+            for (int i = 0; i < b.size; ++i)
+                if (b.indices[i] >= 0)
+                    LQ.row(i) = Q.row(b.indices[i]);
+            S += b.H.topLeftCorner(b.size, b.size).norm() * LQ.squaredNorm();
+        }
+        return (A - Aref).norm() / S;
+    }
+} // namespace
+
+TEST_CASE("nonsmooth-newton-reduced-matrix", "[solver][nonsmooth]")
+{
+    // the merged form A = G + Q_R^T (K_R Q_R) against the block-by-block form
+    std::mt19937 rng(3);
+    const int n = 200, k = 7;
+    const Eigen::MatrixXd Q = Eigen::MatrixXd::Random(n, k), G0 = Eigen::MatrixXd::Random(k, k);
+    const Eigen::MatrixXd G = G0 + G0.transpose();
+    const NonsmoothEval c = random_blocks(n, 300, rng, 120); // repeated index lists, as with the pairs of a contact set
+
+    ReducedMatrix per_block("per_block", 2000), merged("merged", 2000), automatic("auto", 100), automatic_high("auto", 1000);
+    Eigen::MatrixXd A0, A1, A2, A3;
+    for (ReducedMatrix *r : {&per_block, &merged, &automatic, &automatic_high})
+        r->begin_outer();
+    per_block.build(Q, G, c, k, A0);
+    merged.build(Q, G, c, k, A1);
+    automatic.build(Q, G, c, k, A2);
+    automatic_high.build(Q, G, c, k, A3);
+    CHECK(!per_block.merged());
+    CHECK(merged.merged());
+    CHECK(automatic.merged());       // 300 blocks >= 100
+    CHECK(!automatic_high.merged()); // 300 blocks < 1000
+    CHECK(A3 == A0);
+    CHECK(e_S(A1, A0, G, c, Q) < 1e-13);
+    CHECK(A2 == A1);
+
+    // integer checks: the structure has as many entries and rows as an independent construction from the same blocks
+    std::set<std::pair<int, int>> entries;
+    std::set<int> rows;
+    for (const auto &b : c.blocks)
+        for (int i = 0; i < b.size; ++i)
+            if (b.indices[i] >= 0)
+            {
+                rows.insert(b.indices[i]);
+                for (int j = 0; j < b.size; ++j)
+                    if (b.indices[j] >= 0)
+                        entries.insert({b.indices[i], b.indices[j]});
+            }
+    std::vector<int> r = merged.structure_rows();
+    std::sort(r.begin(), r.end());
+    CHECK(size_t(merged.structure_nnz()) == entries.size());
+    CHECK(r == std::vector<int>(rows.begin(), rows.end()));
+
+    // later points of the same outer iteration: the same blocks with other values, and blocks that are not in the structure
+    NonsmoothEval c2 = random_blocks(n, 300, rng, 120);
+    for (size_t b = 0; b < c2.blocks.size() / 2; ++b)
+        c2.blocks[b].indices = c.blocks[b].indices; // in the structure
+    Eigen::MatrixXd B0, B1;
+    per_block.build(Q, G, c2, k, B0);
+    merged.build(Q, G, c2, k, B1);
+    CHECK(e_S(B1, B0, G, c2, Q) < 1e-13);
+
+    // a new outer iteration forgets the structure
+    merged.begin_outer();
+    CHECK(merged.structure_nnz() == 0);
+
+    // negative controls: a block left out, and two indices of a block swapped, change A by far more than the rounding
+    NonsmoothEval left_out = c;
+    left_out.blocks.erase(left_out.blocks.begin() + 5);
+    NonsmoothEval swapped = c;
+    for (int b = 0; b < int(swapped.blocks.size()); ++b)
+    {
+        auto &idx = swapped.blocks[b].indices;
+        if (idx[0] >= 0 && idx[1] >= 0 && idx[0] != idx[1])
+        {
+            std::swap(idx[0], idx[1]);
+            break;
+        }
+    }
+    Eigen::MatrixXd C1, C2;
+    ReducedMatrix m1("merged", 1), m2("merged", 1), p1("per_block", 1);
+    m1.begin_outer();
+    m2.begin_outer();
+    m1.build(Q, G, left_out, k, C1);
+    m2.build(Q, G, swapped, k, C2);
+    CHECK(e_S(C1, A0, G, c, Q) > 1e-6);
+    CHECK(e_S(C2, A0, G, c, Q) > 1e-6);
+}
+
+TEST_CASE("nonsmooth-newton-reduced-matrix-options", "[solver][nonsmooth]")
+{
+    auto bad = [](const json &p) { return json{{"NonsmoothNewton", p}}; };
+    CHECK(NonsmoothNewton::Options::from_json(bad(json::object())).reduced_matrix == "per_block");
+    CHECK(NonsmoothNewton::Options::from_json(bad({{"reduced_matrix", {{"mode", "auto"}, {"merged_min_blocks", 50}}}})).merged_min_blocks == 50);
+    CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"reduced_matrix", {{"mode", "sparse"}}}})));
+    CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"reduced_matrix", {{"merged_min_blocks", 0}}}})));
+}
+
+#ifdef POLYSOLVE_WITH_CHOLMOD
+TEST_CASE("linear-solver-failure-pivot", "[solver][nonsmooth]")
+{
+    // the supernodal LLT reports the unknown at which the factorization of an indefinite matrix stopped
+    auto solver = polysolve::linear::Solver::create("Eigen::CholmodSupernodalLLT", "");
+    REQUIRE(solver != nullptr);
+    const int n = 8;
+    polysolve::StiffnessMatrix A(n, n);
+    std::vector<Eigen::Triplet<double>> trip;
+    for (int i = 0; i < n; ++i)
+        trip.emplace_back(i, i, i == 5 ? -1.0 : 2.0);
+    for (int i = 0; i + 1 < n; ++i)
+    {
+        trip.emplace_back(i, i + 1, 0.1);
+        trip.emplace_back(i + 1, i, 0.1);
+    }
+    A.setFromTriplets(trip.begin(), trip.end());
+    long index = -1;
+    CHECK(!solver->failure_pivot(index));
+    solver->analyze_pattern(A, n);
+    CHECK_THROWS(solver->factorize(A));
+    REQUIRE(solver->failure_pivot(index));
+    CHECK(index >= 0);
+    CHECK(index < n);
+    // a positive definite matrix: no failure
+    for (int i = 0; i < n; ++i)
+        A.coeffRef(i, i) = 2.0;
+    CHECK_NOTHROW(solver->factorize(A));
+    CHECK(!solver->failure_pivot(index));
+}
+#endif
+
+TEST_CASE("nonsmooth-newton-gradient-norm-accept", "[solver][nonsmooth]")
+{
+    // the line search option is in the spec with its default off, and a solve with it on converges
+    static std::shared_ptr<spdlog::logger> logger = spdlog::stdout_color_mt("nonsmooth-newton-gna-logger");
+    logger->set_level(spdlog::level::warn);
+    for (const bool on : {false, true})
+    {
+        json params = R"({"solver": "NonsmoothNewton", "max_iterations": 100, "grad_norm_tol": 1e-10, "line_search": {"method": "RobustArmijo"}})"_json;
+        params["line_search"]["RobustArmijo"]["gradient_norm_accept"] = on;
+        auto solver = Solver::create(params, R"({"solver": "Eigen::SimplicialLLT"})"_json, 1, *logger);
+        LogTermProblem p(4);
+        Problem::TVector x = Problem::TVector::LinSpaced(4, 0.5, 2.0);
+        solver->minimize(p, x);
+        Problem::TVector g;
+        p.gradient(x, g);
+        CHECK(g.norm() < 1e-8);
+    }
+}
+
+TEST_CASE("nonsmooth-newton-model-platform-options", "[solver][nonsmooth]")
+{
+    // model/row_major_q keeps the values of the basis (bitwise the same solve); model/reduced_algebra sums the model gradient over the
+    // rows of the nonsmooth gradient (rounds differently): the solve converges to the same point
+    static std::shared_ptr<spdlog::logger> logger = spdlog::stdout_color_mt("nonsmooth-newton-model-logger");
+    logger->set_level(spdlog::level::warn);
+#ifdef POLYSOLVE_WITH_CHOLMOD
+    const json linear_solver_params = R"({"solver": "Eigen::CholmodSupernodalLLT"})"_json;
+#else
+    const json linear_solver_params = R"({"solver": "Eigen::SimplicialLLT"})"_json;
+#endif
+    const auto run = [&](const bool algebra, const bool row_major, Problem::TVector &x) {
+        json params = R"({"solver": "NonsmoothNewton", "max_iterations": 100, "grad_norm_tol": 1e-10,
+                          "NonsmoothNewton": {"handoff": "off", "path": {"always": "on"}}})"_json;
+        params["NonsmoothNewton"]["model"] = {{"reduced_algebra", algebra}, {"row_major_q", row_major}};
+        auto solver = Solver::create(params, linear_solver_params, 1, *logger);
+        LogTermProblem p(4);
+        x = Problem::TVector::LinSpaced(4, 0.5, 2.0);
+        solver->minimize(p, x);
+        Problem::TVector g;
+        p.gradient(x, g);
+        CHECK(g.norm() < 1e-8);
+    };
+    Problem::TVector x0, x1, x2, x3;
+    run(false, false, x0);
+    run(false, true, x1);
+    run(true, false, x2);
+    run(true, true, x3);
+    CHECK(x1 == x0);
+    CHECK(x3 == x2);
+    CHECK((x2 - x0).norm() < 1e-8);
 }

@@ -28,6 +28,7 @@ namespace polysolve::nonlinear::line_search
             const double step_size) const override;
 
         double delta_relative_tolerance;
+        bool gradient_norm_accept = false;
     };
 
 } // namespace polysolve::nonlinear::line_search

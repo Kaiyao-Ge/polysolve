@@ -39,7 +39,7 @@ namespace polysolve::nonlinear
         using SpMat = StiffnessMatrix;
 
         PathRunner(const NonsmoothNewtonBase::Options &opts, NonsmoothNewtonBase::Stats &stats, BasisMatrix &basis, spdlog::logger &logger)
-            : opts_(opts), st_(stats), basis_(basis), logger_(logger)
+            : opts_(opts), st_(stats), basis_(basis), reduced_(opts.reduced_matrix, opts.merged_min_blocks), logger_(logger)
         {
         }
 

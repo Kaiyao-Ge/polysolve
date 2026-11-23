@@ -136,12 +136,26 @@ namespace polysolve::nonlinear
         virtual void outer_end(const long *cuts, const long inner) = 0;
     };
 
+    /// @brief A round of the repair of a basis matrix whose factorization failed.
+    struct RepairQuery
+    {
+        const Problem::TVector &x; ///< the outer iterate (the anchor of B)
+        int round;                 ///< 1, 2, ...
+        long fail_index;           ///< the unknown at which the last factorization stopped (-1: not known)
+        int radius;                ///< the radius (in the graph of the units' nodes) of the first round around a failure node
+    };
+
     /// @brief Corrections of the basis matrix B that the problem knows (static correction of the lifted units, repair).
     class BasisPort
     {
     public:
         virtual ~BasisPort() = default;
+        /// @brief Static correction of B for the units of the first layer that the model keeps frozen: dB = proj(K) - K
         virtual bool correction(const Problem::TVector &x, const bool projected, Problem::THessian &dB) = 0;
+        /// @brief Local repair of an indefinite B: the frozen units with negative curvature around the failure of the factorization get
+        /// their projected block (B + dB is factorized again). dB is the total change of B of all rounds so far; false: no repair possible
+        /// (nothing new to project), the caller then projects the whole smooth part.
+        virtual bool repair(const RepairQuery &query, Problem::THessian &dB, bool &final_round) = 0;
     };
 
     /// @brief Sink of the strategy's log rows.

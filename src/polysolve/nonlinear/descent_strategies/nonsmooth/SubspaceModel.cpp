@@ -7,9 +7,11 @@
 
 namespace polysolve::nonlinear
 {
-    SubspaceModel::SubspaceModel(const BasisMatrix &basis, const ReducedMatrix &reduced, const int n_, const int cap_)
-        : n(n_), cap(cap_), basis_(basis), reduced_(reduced)
+    SubspaceModel::SubspaceModel(const BasisMatrix &basis, ReducedMatrix &reduced, const int n_, const int cap_, const bool reduced_algebra, const bool row_major_q)
+        : n(n_), cap(cap_), reduced_algebra_(reduced_algebra), row_major_(row_major_q), basis_(basis), reduced_(reduced)
     {
+        if (row_major_)
+            Qr.resize(n, cap);
         Q.resize(n, cap);
         HQ.resize(n, cap);
         G = Mat::Zero(cap, cap);
@@ -32,6 +34,9 @@ namespace polysolve::nonlinear
             }
         });
         ell[j] = q.dot(basis_.gnc);
+        if (row_major_)
+            for (Eigen::Index i = 0; i < q.size(); ++i)
+                Qr(i, j) = q[i];
         ++k;
     }
 
@@ -41,10 +46,20 @@ namespace polysolve::nonlinear
             return;
         const Mat dHQ = Mat(delta.dH * Q.leftCols(k));
         HQ.leftCols(k) -= dHQ;
-        Mat dG = Q.leftCols(k).transpose() * dHQ;
-        const Mat dGt = dG.transpose();
-        dG = 0.5 * (dG + dGt);
-        G.topLeftCorner(k, k) -= dG;
+        if (reduced_algebra_)
+        {
+            // the model gradient takes G z directly: G is formed again from the updated HQ (no accumulated rounding of the old G)
+            Mat Gn = Q.leftCols(k).transpose() * HQ.leftCols(k);
+            const Mat Gnt = Gn.transpose();
+            G.topLeftCorner(k, k) = 0.5 * (Gn + Gnt);
+        }
+        else
+        {
+            Mat dG = Q.leftCols(k).transpose() * dHQ;
+            const Mat dGt = dG.transpose();
+            dG = 0.5 * (dG + dGt);
+            G.topLeftCorner(k, k) -= dG;
+        }
         ell.head(k) -= Q.leftCols(k).transpose() * delta.dg;
     }
 
@@ -66,11 +81,54 @@ namespace polysolve::nonlinear
         }
         if (deriv)
         {
-            const Vec Hp = HQ.leftCols(k) * zk;
-            const Vec full = basis_.gnc + Hp + c.g;
-            e.grad = Q.leftCols(k).transpose() * full;
+            if (reduced_algebra_)
+            {
+                // ell = Q^T g_s and G = Q^T H_s Q are kept in step with the in-place updates: only the rows of the nonsmooth
+                // gradient that can be nonzero are summed, in the order the blocks first mention them (global path: its nonzeros)
+                e.grad = ell.head(k) + Gz;
+                const auto add_row = [&](const Eigen::Index r) {
+                    const double gr = c.g[r];
+                    if (gr == 0.0)
+                        return;
+                    if (row_major_)
+                    {
+                        const double *qr = &Qr(r, 0);
+                        for (int j = 0; j < k; ++j)
+                            e.grad[j] += qr[j] * gr;
+                    }
+                    else
+                        for (int j = 0; j < k; ++j)
+                            e.grad[j] += Q(r, j) * gr;
+                };
+                if (c.local)
+                {
+                    if (row_mark_.size() != std::size_t(c.g.size()))
+                    {
+                        row_mark_.assign(std::size_t(c.g.size()), 0);
+                        row_epoch_ = 0;
+                    }
+                    const int ep = ++row_epoch_;
+                    for (const auto &b : c.blocks)
+                        for (int i = 0; i < b.size; ++i)
+                            if (const int r = b.indices[i]; r >= 0 && row_mark_[r] != ep)
+                            {
+                                row_mark_[r] = ep;
+                                add_row(r);
+                            }
+                }
+                else
+                    for (Eigen::Index i = 0; i < c.g.size(); ++i)
+                        add_row(i);
+            }
+            else
+            {
+                const Vec Hp = HQ.leftCols(k) * zk;
+                const Vec full = basis_.gnc + Hp + c.g;
+                e.grad = Q.leftCols(k).transpose() * full;
+            }
             if (rr)
                 e.grad += cq.head(k);
+            reduced_.set_row_major_q(row_major_ ? &Qr : nullptr);
             reduced_.build(Q, Gk, c, k, e.A);
             const Mat At = e.A.transpose();
             e.A = 0.5 * (e.A + At);

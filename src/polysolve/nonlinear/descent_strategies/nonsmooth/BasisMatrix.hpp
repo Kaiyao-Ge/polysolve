@@ -53,6 +53,9 @@ namespace polysolve::nonlinear
         void factorize(const SpMat &H);
         bool same_pattern(const SpMat &H) const;
         bool try_solve(Problem &p, const SpMat &H, const Vec &g, Vec &d, const NormType nt);
+        /// B + dB, with the frozen units with negative curvature around the failures made positive (BasisPort::repair), up to basis_repair/max_rounds rounds
+        bool repair(Problem &p, const Vec &x, const Vec &g, Vec &d);
+        bool factor_failed_ = false; ///< the last try_solve failed in the factorization
 
         const NonsmoothNewtonBase::Options &opts_;
         NonsmoothNewtonBase::Stats &st_;

@@ -132,6 +132,10 @@ namespace polysolve::linear
         ///
         virtual void solve(const Ref<const VectorXd> b, Ref<VectorXd> x) = 0;
 
+        /// @brief The unknown (index in the matrix) at which the last numeric factorization stopped because the matrix is not positive
+        /// definite (supported by Eigen::CholmodSupernodalLLT); false if there was no such failure or the solver does not report it
+        virtual bool failure_pivot(long &index) const { return false; }
+
         /// @brief Name of the solver type (for debugging purposes)
         virtual std::string name() const { return ""; }
     };

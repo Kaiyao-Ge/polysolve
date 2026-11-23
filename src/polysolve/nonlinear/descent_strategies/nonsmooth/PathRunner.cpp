@@ -144,7 +144,7 @@ namespace polysolve::nonlinear
         // smallest change of the true energy the acceptance test can resolve (0: model rounding only)
         const double e_res = opts_.resolution ? 32 * EPS * std::abs(E0) : 0.0;
         const int col_cap = opts_.max_columns;
-        SubspaceModel M(basis_, reduced_, n, cap);
+        SubspaceModel M(basis_, reduced_, n, cap, opts_.reduced_algebra, opts_.row_major_q);
         // Jacobian floor of this outer iteration (-inf: off): jacobian_floor * J_ref, or min J at x where x is below it
         double jfloor = -INFINITY;
         if (opts_.jacobian_floor > 0 && j_ref > 0 && std::isfinite(min_j_x))
@@ -174,6 +174,7 @@ namespace polysolve::nonlinear
         cstate.y = x;
         cstate.E = basis_.Ec0;
         cstate = eval(p, x, true, &cstate); // fills derivatives only (reuse of E)
+        reduced_.begin_outer();
 
         std::vector<Vec> pts;      // p^(j) reduced displacements
         std::vector<double> mvals; // m at p^(j)

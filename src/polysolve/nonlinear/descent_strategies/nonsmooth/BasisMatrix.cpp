@@ -154,12 +154,14 @@ namespace polysolve::nonlinear
 
     bool BasisMatrix::try_solve(Problem &p, const SpMat &H, const Vec &g, Vec &d, const NormType nt)
     {
+        factor_failed_ = false;
         try
         {
             factorize(H);
         }
         catch (const std::runtime_error &)
         {
+            factor_failed_ = true;
             return false;
         }
         d = backsolve(-g);
@@ -169,10 +171,42 @@ namespace polysolve::nonlinear
         return !(std::isnan(res) || res > res_tol_);
     }
 
+    bool BasisMatrix::repair(Problem &p, const Vec &x, const Vec &g, Vec &d)
+    {
+        BasisPort *port = p.nonsmooth_basis();
+        if (port == nullptr)
+            return false;
+        for (int round = 1; round <= opts_.basis_repair_max_rounds; ++round)
+        {
+            long index = -1;
+            if (!linear_->failure_pivot(index))
+                index = -1;
+            SpMat dB;
+            bool final_round = false;
+            if (!port->repair({x, round, index, opts_.basis_repair_radius}, dB, final_round))
+                return false;
+            ++st_.repair_rounds;
+            SpMat Br = B + dB;
+            Br.makeCompressed();
+            if (try_solve(p, Br, g, d, NormType::EUCLIDEAN))
+            {
+                B = std::move(Br);
+                reanchored = true; // B != Hnc + Hcp
+                ++st_.repaired;
+                return true;
+            }
+            if (!factor_failed_ || final_round)
+                return false;
+        }
+        return false;
+    }
+
     bool BasisMatrix::direction_projected_mode(Problem &p, const Vec &x, const Vec &g, Vec &d, const double h_edge)
     {
         projected = false;
         bool ok = try_solve(p, B, g, d, NormType::EUCLIDEAN);
+        if (!ok && factor_failed_ && opts_.basis_repair == "r_ad")
+            ok = repair(p, x, g, d);
         if (ok && opts_.guard)
         {
             const double len = p.nonsmooth_step_length(x, x + d);

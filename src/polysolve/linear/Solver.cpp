@@ -266,6 +266,32 @@ namespace polysolve::linear
 
     ////////////////////////////////////////////////////////////////////////////////
 
+#ifdef POLYSOLVE_WITH_CHOLMOD
+    namespace
+    {
+        using CholSupernodal = Eigen::CholmodSupernodalLLT<polysolve::linear::StiffnessMatrix>;
+        /// access to the protected factor of the Eigen wrapper (a derived type without data members)
+        struct CholAccess : CholSupernodal
+        {
+            const cholmod_factor *fac() const { return m_cholmodFactor; }
+        };
+        /// Eigen::CholmodSupernodalLLT that reports where a factorization failed
+        class CholmodSolver : public EigenDirect<CholSupernodal>
+        {
+        public:
+            using EigenDirect<CholSupernodal>::EigenDirect;
+            bool failure_pivot(long &index) const override
+            {
+                const cholmod_factor *L = static_cast<const CholAccess &>(m_Solver).fac();
+                if (L == nullptr || L->minor >= L->n || L->Perm == nullptr)
+                    return false;
+                index = long(static_cast<const int *>(L->Perm)[L->minor]);
+                return true;
+            }
+        };
+    } // namespace
+#endif
+
     namespace
     {
 
@@ -351,7 +377,7 @@ namespace polysolve::linear
         }
         else if (solver == "Eigen::CholmodSupernodalLLT")
         {
-            RETURN_DIRECT_SOLVER_PTR(CholmodSupernodalLLT, "Eigen::CholmodSupernodalLLT");
+            return std::make_unique<CholmodSolver>("Eigen::CholmodSupernodalLLT");
         }
         else if (solver == "Eigen::CholmodDecomposition")
         {

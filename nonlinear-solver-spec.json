@@ -589,19 +589,19 @@
         "pointer": "/NonsmoothNewton/model/reduced_algebra",
         "default": false,
         "type": "bool",
-        "doc": "Reduced algebra of the model (changes rounding). Only false is available yet."
+        "doc": "Reduced algebra of the model: the gradient of the reduced model sums only the rows of the nonsmooth gradient that can be nonzero (instead of forming the full-length vector and multiplying by the basis), and G is formed again from H Q when units move. Changes rounding. Platform option, default off."
     },
     {
         "pointer": "/NonsmoothNewton/model/row_major_q",
         "default": false,
         "type": "bool",
-        "doc": "Row-major storage of the basis columns. Only false is available yet."
+        "doc": "Keep a row-major copy of the basis columns for the row gathers of the reduced model (same values, contiguous rows). Platform option, default off."
     },
     {
         "pointer": "/NonsmoothNewton/reduced_matrix",
         "default": null,
         "type": "object",
-        "optional": ["mode", "merged_min_blocks", "check"],
+        "optional": ["mode", "merged_min_blocks"],
         "doc": "Assembly of the reduced matrix of the model."
     },
     {
@@ -609,7 +609,7 @@
         "default": "per_block",
         "type": "string",
         "options": ["per_block", "auto", "merged"],
-        "doc": "per_block = block by block; merged = one merged product; auto = merged from merged_min_blocks blocks at the first point of an outer iteration. Only per_block is available yet."
+        "doc": "per_block = block by block; merged = one merged product; auto = merged from merged_min_blocks blocks at the first point of an outer iteration. "
     },
     {
         "pointer": "/NonsmoothNewton/reduced_matrix/merged_min_blocks",
@@ -617,12 +617,6 @@
         "type": "int",
         "min": 1,
         "doc": "Number of blocks from which auto uses the merged product."
-    },
-    {
-        "pointer": "/NonsmoothNewton/reduced_matrix/check",
-        "default": false,
-        "type": "bool",
-        "doc": "Check the merged product against the per-block one. Only false is available yet."
     },
     {
         "pointer": "/NonsmoothNewton/basis_repair",
@@ -774,9 +768,10 @@
         "default": "error",
         "type": "string",
         "options": [
-            "error"
+            "error",
+            "remainder"
         ],
-        "doc": "What to do with an energy form that has no local terms: error."
+        "doc": "What to do with an energy form that cannot be split into units: error (stop at startup, naming the form) or remainder (the form stays in the frozen part: its gradient and Hessian at the anchor; it is not a unit and is never selected)."
     },
     {
         "pointer": "/NonsmoothNewton/blind/al_stage",
@@ -1308,7 +1303,8 @@
         "default": null,
         "type": "object",
         "optional": [
-            "delta_relative_tolerance"
+            "delta_relative_tolerance",
+            "gradient_norm_accept"
         ],
         "doc": "Options for RobustArmijo."
     },
@@ -1318,6 +1314,12 @@
         "type": "float",
         "min_value": 0,
         "doc": "Relative tolerance on E to switch to approximate."
+    },
+    {
+        "pointer": "/line_search/RobustArmijo/gradient_norm_accept",
+        "default": false,
+        "type": "bool",
+        "doc": "Where the energy no longer resolves the step (the approximate test), also accept a step whose trapezoid estimate of the energy change is negative and that decreases the gradient norm. A full Newton step on a quadratic fails the approximate test: its estimate and its error term cancel exactly."
     },
     {
         "pointer": "/box_constraints",

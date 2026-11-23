@@ -133,7 +133,6 @@ namespace polysolve::nonlinear
             const json &r = p["reduced_matrix"];
             o.reduced_matrix = value_or(r, "mode", o.reduced_matrix);
             o.merged_min_blocks = value_or(r, "merged_min_blocks", o.merged_min_blocks);
-            o.reduced_matrix_check = value_or(r, "check", o.reduced_matrix_check);
         }
         if (p.is_object() && p.contains("basis_repair"))
         {
@@ -179,9 +178,6 @@ namespace polysolve::nonlinear
         check_choice("jacobian/exact_gate", o.exact_gate, {"auto", "off", "gate"});
         check_choice("reduced_matrix/mode", o.reduced_matrix, {"per_block", "auto", "merged"});
         check_choice("basis_repair/mode", o.basis_repair, {"off", "r_ad"});
-        if (o.reduced_matrix != "per_block" || o.basis_repair != "off"
-            || o.reduced_algebra || o.row_major_q || o.reduced_matrix_check)
-            throw std::runtime_error("NonsmoothNewton: model/*, reduced_matrix/* and basis_repair/* other than their defaults are not available yet");
         if (o.lift_max_rounds < 1 || o.exact_gate_window < 1 || o.exact_gate_retest < 1 || o.handoff_gate_max_refusals < 1
             || o.merged_min_blocks < 1 || o.basis_repair_max_rounds < 1 || o.basis_repair_radius < 1)
             throw std::runtime_error("NonsmoothNewton: first_layer/max_rounds, jacobian/exact_gate_window, jacobian/exact_gate_retest, handoff_gate/max_refusals, reduced_matrix/merged_min_blocks, basis_repair/max_rounds and basis_repair/radius must be >= 1");
@@ -540,6 +536,8 @@ namespace polysolve::nonlinear
         json &info = solver_info["NonsmoothNewton"];
         if (opts_.first_layer_on())
             info["ev_promotions"] = s.promotions;
+        if (opts_.basis_repair == "r_ad")
+            info.update({{"repair_rounds", s.repair_rounds}, {"repaired", s.repaired}});
         if (opts_.reread_on())
             info.update({{"reread_calls", s.rr_calls}, {"reread_after_promotion", s.rr_after_promotion}, {"restart_cont_n", s.restart_cont}});
         if (opts_.selection == "blind")
