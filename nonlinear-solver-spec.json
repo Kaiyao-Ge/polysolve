@@ -237,7 +237,16 @@
             "hand_back",
             "jacobian",
             "guard",
-            "debug"
+            "debug",
+            "selection",
+            "path",
+            "first_layer",
+            "reread",
+            "handoff_gate",
+            "model",
+            "reduced_matrix",
+            "basis_repair",
+            "blind"
         ],
         "doc": "Options for NonsmoothNewton: Newton with a protected path on the split f = s + n of the problem (Problem::has_nonsmooth_term). On an iterate with active nonsmooth terms it minimizes a reduced model (frozen quadratic of s, exact n) with Levenberg-Marquardt steps in a growing subspace, certifies every segment of the path with max_step_size and accepts the end point (or a retraction along the path) by the true decrease; otherwise the Newton direction is line searched. Falls back to the Newton chain."
     },
@@ -332,7 +341,10 @@
         "type": "object",
         "optional": [
             "bound",
-            "floor"
+            "floor",
+            "exact_gate",
+            "exact_gate_window",
+            "exact_gate_retest"
         ],
         "doc": "Limits on the element volume ratios J = det F of the smooth part at the end point y of every inner step (after its Armijo test), checked in one sweep over the elements through Problem::smooth_min_jacobians. They keep the path where the frozen quadratic of the smooth part is trusted: for an energy term -log J, once an outer iteration needs an element compressed below half its volume, the minimizer of the element's quadratic model is an inverted configuration. If a step after the first violates a limit, the path ends at the previous point; if the first step does, it is halved further (at most 40 times) until the limits and the Armijo test hold, and the path ends after it (no such point: no inner step, the Newton step is line searched). A limit is not applied where the problem gives NaN (the defaults of Problem::smooth_min_jacobian(s)); that is reported once per solve at debug level."
     },
@@ -350,6 +362,27 @@
         "type": "float",
         "min": 0,
         "doc": "The smallest J over the elements stays >= floor * J_ref, or >= its value at the outer iterate where that is already lower (0 = off). J_ref is the smallest J at the first iterate of the solve whose direction request NonsmoothNewton does not decline by the handoff (and where the problem gives a finite value); if the solve starts below the gradient threshold of the handoff, that is the first iterate after a hand-back, not the start of the solve."
+    },
+    {
+        "pointer": "/NonsmoothNewton/jacobian/exact_gate",
+        "default": "auto",
+        "type": "string",
+        "options": ["auto", "off", "gate"],
+        "doc": "Jg: gate the relative Jacobian limit on the exact units by its effect (a limit that ended a path pays if the next outer iteration has no limit event itself). auto = off for the energy split, gate for the blind selection."
+    },
+    {
+        "pointer": "/NonsmoothNewton/jacobian/exact_gate_window",
+        "default": 4,
+        "type": "int",
+        "min": 1,
+        "doc": "Window of the gate."
+    },
+    {
+        "pointer": "/NonsmoothNewton/jacobian/exact_gate_retest",
+        "default": 5,
+        "type": "int",
+        "min": 1,
+        "doc": "Retest interval of the gate."
     },
     {
         "pointer": "/NonsmoothNewton/guard",
@@ -440,6 +473,378 @@
         "type": "int",
         "min": 0,
         "doc": "Problem side: null control on the candidate order within a segment (0 off, 1 reverse, >= 2 seeded shuffle)."
+    },
+    {
+        "pointer": "/NonsmoothNewton/selection",
+        "default": "energy_split",
+        "type": "string",
+        "options": ["energy_split", "blind"],
+        "doc": "Which units of the problem are modelled exactly by the path: energy_split = the nonsmooth term n that the problem gives; blind = units chosen by the problem's selection (NonsmoothTerm::selection)."
+    },
+    {
+        "pointer": "/NonsmoothNewton/path",
+        "default": null,
+        "type": "object",
+        "optional": ["always"],
+        "doc": "Protected path."
+    },
+    {
+        "pointer": "/NonsmoothNewton/path/always",
+        "default": "auto",
+        "type": "string",
+        "options": ["auto", "on", "off"],
+        "doc": "Run the path at every outer iteration, not only where nonsmooth terms are active. auto = off for the energy split, on for the blind selection."
+    },
+    {
+        "pointer": "/NonsmoothNewton/first_layer",
+        "default": null,
+        "type": "object",
+        "optional": ["enabled", "lift_model", "lift_basis", "max_rounds", "restart_continuity", "events"],
+        "doc": "Units that the path promotes to the nonsmooth term when a limiter cuts a step."
+    },
+    {
+        "pointer": "/NonsmoothNewton/first_layer/enabled",
+        "default": "auto",
+        "type": "string",
+        "options": ["auto", "on", "off"],
+        "doc": "Enable the promotion: the units behind a step cut by a limiter (fraction-to-boundary, max_step_size, Jacobian limits) become exact in place and the path restarts. auto = off for the energy split, on for the blind selection."
+    },
+    {
+        "pointer": "/NonsmoothNewton/first_layer/lift_model",
+        "default": "exact",
+        "type": "string",
+        "options": ["exact", "frozen", "frozen_projected"],
+        "doc": "How a promoted unit enters the model: exact, frozen (the anchor's block) or frozen_projected (the projected block of B)."
+    },
+    {
+        "pointer": "/NonsmoothNewton/first_layer/lift_basis",
+        "default": "projected",
+        "type": "string",
+        "options": ["projected", "raw"],
+        "doc": "How a promoted unit enters B: projected or raw. frozen with raw lifts nothing and is an error."
+    },
+    {
+        "pointer": "/NonsmoothNewton/first_layer/max_rounds",
+        "default": 20,
+        "type": "int",
+        "min": 1,
+        "doc": "Largest number of restarts of the path after promotions in one outer iteration."
+    },
+    {
+        "pointer": "/NonsmoothNewton/first_layer/restart_continuity",
+        "default": true,
+        "type": "bool",
+        "doc": "Keep the model value continuous across a restart (needs reread)."
+    },
+    {
+        "pointer": "/NonsmoothNewton/reread",
+        "default": null,
+        "type": "object",
+        "optional": ["enabled"],
+        "doc": "Re-read of the true gradient at the inner points of the path."
+    },
+    {
+        "pointer": "/NonsmoothNewton/reread/enabled",
+        "default": "auto",
+        "type": "string",
+        "options": ["auto", "on", "off"],
+        "doc": "Enable the re-read of the true gradient at the inner points. auto = off for the energy split, on for the blind selection."
+    },
+    {
+        "pointer": "/NonsmoothNewton/handoff_gate",
+        "default": null,
+        "type": "object",
+        "optional": ["enabled", "factor", "max_refusals"],
+        "doc": "Threshold on the gradient before the handoff on a small gradient."
+    },
+    {
+        "pointer": "/NonsmoothNewton/handoff_gate/enabled",
+        "default": "auto",
+        "type": "string",
+        "options": ["auto", "on", "off"],
+        "doc": "Hand the solve to the Newton chain after a noise-floor stop only if 1/2 g.B^-1 g at the anchor is at most factor times the energy resolution (else the path is tried again, at most max_refusals times without progress). auto = off for the energy split, on for the blind selection."
+    },
+    {
+        "pointer": "/NonsmoothNewton/handoff_gate/factor",
+        "default": 10000,
+        "type": "float",
+        "min": 0,
+        "doc": "Factor of the threshold."
+    },
+    {
+        "pointer": "/NonsmoothNewton/handoff_gate/max_refusals",
+        "default": 2,
+        "type": "int",
+        "min": 1,
+        "doc": "Largest number of refusals of a handoff."
+    },
+    {
+        "pointer": "/NonsmoothNewton/model",
+        "default": null,
+        "type": "object",
+        "optional": ["reduced_algebra", "row_major_q"],
+        "doc": "Algebra of the reduced model."
+    },
+    {
+        "pointer": "/NonsmoothNewton/model/reduced_algebra",
+        "default": false,
+        "type": "bool",
+        "doc": "Reduced algebra of the model (changes rounding). Only false is available yet."
+    },
+    {
+        "pointer": "/NonsmoothNewton/model/row_major_q",
+        "default": false,
+        "type": "bool",
+        "doc": "Row-major storage of the basis columns. Only false is available yet."
+    },
+    {
+        "pointer": "/NonsmoothNewton/reduced_matrix",
+        "default": null,
+        "type": "object",
+        "optional": ["mode", "merged_min_blocks", "check"],
+        "doc": "Assembly of the reduced matrix of the model."
+    },
+    {
+        "pointer": "/NonsmoothNewton/reduced_matrix/mode",
+        "default": "per_block",
+        "type": "string",
+        "options": ["per_block", "auto", "merged"],
+        "doc": "per_block = block by block; merged = one merged product; auto = merged from merged_min_blocks blocks at the first point of an outer iteration. Only per_block is available yet."
+    },
+    {
+        "pointer": "/NonsmoothNewton/reduced_matrix/merged_min_blocks",
+        "default": 2000,
+        "type": "int",
+        "min": 1,
+        "doc": "Number of blocks from which auto uses the merged product."
+    },
+    {
+        "pointer": "/NonsmoothNewton/reduced_matrix/check",
+        "default": false,
+        "type": "bool",
+        "doc": "Check the merged product against the per-block one. Only false is available yet."
+    },
+    {
+        "pointer": "/NonsmoothNewton/basis_repair",
+        "default": null,
+        "type": "object",
+        "optional": ["mode", "max_rounds", "radius"],
+        "doc": "Repair of the basis matrix when its factorization fails."
+    },
+    {
+        "pointer": "/NonsmoothNewton/basis_repair/mode",
+        "default": "off",
+        "type": "string",
+        "options": ["off", "r_ad"],
+        "doc": "off or r_ad (local repair). Only off is available yet."
+    },
+    {
+        "pointer": "/NonsmoothNewton/basis_repair/max_rounds",
+        "default": 3,
+        "type": "int",
+        "min": 1,
+        "doc": "Largest number of repair rounds."
+    },
+    {
+        "pointer": "/NonsmoothNewton/basis_repair/radius",
+        "default": 2,
+        "type": "int",
+        "min": 1,
+        "doc": "Radius of the repaired neighbourhood in the node graph."
+    },
+    {
+        "pointer": "/NonsmoothNewton/first_layer/events",
+        "default": [
+            "jfloor",
+            "jbound",
+            "ftb",
+            "ccd"
+        ],
+        "type": "list",
+        "doc": "Limiters whose cut promotes units: jfloor, jbound (Jacobian limits), ftb (fraction-to-boundary), ccd (max_step_size). A validity cut does not promote."
+    },
+    {
+        "pointer": "/NonsmoothNewton/first_layer/events/*",
+        "default": "ftb",
+        "type": "string",
+        "options": [
+            "jfloor",
+            "jbound",
+            "ftb",
+            "ccd"
+        ],
+        "doc": "One limiter of first_layer/events."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind",
+        "default": null,
+        "type": "object",
+        "optional": [
+            "second_layer",
+            "third_layer",
+            "present_only",
+            "born_hold",
+            "exit_at",
+            "unit_partition",
+            "unsupported_forms",
+            "al_stage",
+            "wall_switch"
+        ],
+        "doc": "Parameters of the blind selection (selection = blind); read by the problem implementation."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/second_layer",
+        "default": null,
+        "type": "object",
+        "optional": [
+            "enabled",
+            "eta",
+            "marginal_kappa"
+        ],
+        "doc": "Second layer: at the start of an outer iteration the units with the largest force error become exact (within a budget)."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/second_layer/enabled",
+        "default": true,
+        "type": "bool",
+        "doc": "Enable the second layer."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/second_layer/eta",
+        "default": 0.1,
+        "type": "float",
+        "min": 0,
+        "doc": "Budget of the second layer: the force error that stays frozen is at most eta times the larger residual of the two anchors."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/second_layer/marginal_kappa",
+        "default": 0.1,
+        "type": "float",
+        "min": 0,
+        "doc": "Marginal benefit: a batch of units is admitted only if it lowers the remaining error by more than this relative amount (0 = off)."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/third_layer",
+        "default": null,
+        "type": "object",
+        "optional": [
+            "enabled"
+        ],
+        "doc": "Third layer: units stay exact across time steps while they are charged."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/third_layer/enabled",
+        "default": true,
+        "type": "bool",
+        "doc": "Enable the third layer (units that were charged in the last epoch stay in the exact set)."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/present_only",
+        "default": true,
+        "type": "bool",
+        "doc": "Only units that are present at both anchors are charged with a force error."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/born_hold",
+        "default": true,
+        "type": "bool",
+        "doc": "A unit that is born exact (a new contact pair) stays exact while it is present, whatever the third layer says."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/exit_at",
+        "default": "all_changes",
+        "type": "string",
+        "options": [
+            "all_changes",
+            "time_step"
+        ],
+        "doc": "Where exact units that were not charged leave the exact set: at every change of the energy (all_changes) or only at time steps (time_step)."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/unit_partition",
+        "default": "local_term",
+        "type": "string",
+        "options": [
+            "local_term"
+        ],
+        "doc": "How the local energy terms are grouped into units: local_term (terms that depend on the same nodes form one unit)."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/unsupported_forms",
+        "default": "error",
+        "type": "string",
+        "options": [
+            "error"
+        ],
+        "doc": "What to do with an energy form that has no local terms: error."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/al_stage",
+        "default": "newton",
+        "type": "string",
+        "options": [
+            "newton",
+            "blind"
+        ],
+        "doc": "augmented Lagrangian subproblems: newton (the Newton chain solves them) or blind."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/wall_switch",
+        "default": null,
+        "type": "object",
+        "optional": [
+            "enabled",
+            "threshold",
+            "reread_off",
+            "counted"
+        ],
+        "doc": "A time step after one whose inner steps were cut by limiters too often skips the second and third layer."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/wall_switch/enabled",
+        "default": false,
+        "type": "bool",
+        "doc": "Enable the wall switch."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/wall_switch/threshold",
+        "default": 1.2,
+        "type": "float",
+        "min": 0,
+        "doc": "Cuts per accepted inner step of the last time step from which the switch triggers."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/wall_switch/reread_off",
+        "default": false,
+        "type": "bool",
+        "doc": "A triggered time step also switches the re-read off."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/wall_switch/counted",
+        "default": [
+            "guard",
+            "valid",
+            "ftb",
+            "ccd",
+            "jfloor",
+            "jbound"
+        ],
+        "type": "list",
+        "doc": "Cuts that count."
+    },
+    {
+        "pointer": "/NonsmoothNewton/blind/wall_switch/counted/*",
+        "default": "guard",
+        "type": "string",
+        "options": [
+            "guard",
+            "valid",
+            "ftb",
+            "ccd",
+            "jfloor",
+            "jbound"
+        ],
+        "doc": "One counted cut."
     },
     {
         "pointer": "/ADAM",

@@ -11,6 +11,7 @@
 #include "descent_strategies/GradientDescent.hpp"
 #include "descent_strategies/LBFGS.hpp"
 #include "descent_strategies/NonsmoothNewton.hpp"
+#include "descent_strategies/BlindNewton.hpp"
 
 #include <polysolve/Utils.hpp>
 
@@ -84,7 +85,11 @@ namespace polysolve::nonlinear
 
             else if (solver_name == "NonsmoothNewton")
             {
-                return std::make_shared<NonsmoothNewton>(solver_params, linear_solver_params, characteristic_length, logger, norm_type);
+                // NonsmoothNewton/selection picks the class
+                const std::string selection = NonsmoothNewton::Options::from_json(solver_params).selection;
+                if (selection == "energy_split")
+                    return std::make_shared<NonsmoothNewton>(solver_params, linear_solver_params, characteristic_length, logger, norm_type);
+                return std::make_shared<BlindNewton>(solver_params, linear_solver_params, characteristic_length, logger, norm_type);
             }
 
             else if (solver_name == "LBFGS" || solver_name == "L-BFGS")
@@ -536,6 +541,7 @@ namespace polysolve::nonlinear
                     objFunc.solution_changed(x1); // a line search leaves the problem at its accepted point
                 if (objFunc.after_line_search_custom_operation(x, x1))
                     objFunc.solution_changed(x1);
+                objFunc.nonsmooth_step_accepted(x, x1);
                 x = x1;
             }
 

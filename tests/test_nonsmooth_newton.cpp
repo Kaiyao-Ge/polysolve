@@ -6,6 +6,7 @@
 #include <polysolve/nonlinear/descent_strategies/ParallelKernels.hpp>
 #include <polysolve/Utils.hpp>
 #include <polysolve/Types.hpp>
+#include <polysolve/nonlinear/NonsmoothPorts.hpp>
 
 #include <nonlinear-solver-spec.hpp>
 
@@ -165,6 +166,10 @@ TEST_CASE("nonsmooth-newton-options", "[solver][nonsmooth]")
     CHECK(d.hand_back_contraction == 10);
     CHECK(d.jacobian_bound == 0.6);
     CHECK(d.jacobian_floor == 0.1);
+    CHECK(d.selection == "energy_split");
+    CHECK(d.first_layer == "auto");
+    CHECK(d.reduced_matrix == "per_block");
+    CHECK(d.basis_repair == "off");
     // Solver::create fills in the defaults of the spec: the same values
     {
         jse::JSE jse;
@@ -191,6 +196,28 @@ TEST_CASE("nonsmooth-newton-options", "[solver][nonsmooth]")
         CHECK(ds.guard_check == d.guard_check);
         CHECK(ds.dedupe == d.dedupe);
         CHECK(ds.fast_validity == d.fast_validity);
+        CHECK(ds.selection == d.selection);
+        CHECK(ds.path_always == d.path_always);
+        CHECK(ds.reread == d.reread);
+        CHECK(ds.first_layer == d.first_layer);
+        CHECK(ds.lift_model == d.lift_model);
+        CHECK(ds.lift_basis == d.lift_basis);
+        CHECK(ds.lift_max_rounds == d.lift_max_rounds);
+        CHECK(ds.restart_continuity == d.restart_continuity);
+        CHECK(ds.handoff_gate == d.handoff_gate);
+        CHECK(ds.handoff_gate_factor == d.handoff_gate_factor);
+        CHECK(ds.handoff_gate_max_refusals == d.handoff_gate_max_refusals);
+        CHECK(ds.exact_gate == d.exact_gate);
+        CHECK(ds.exact_gate_window == d.exact_gate_window);
+        CHECK(ds.exact_gate_retest == d.exact_gate_retest);
+        CHECK(ds.reduced_algebra == d.reduced_algebra);
+        CHECK(ds.row_major_q == d.row_major_q);
+        CHECK(ds.reduced_matrix == d.reduced_matrix);
+        CHECK(ds.merged_min_blocks == d.merged_min_blocks);
+        CHECK(ds.reduced_matrix_check == d.reduced_matrix_check);
+        CHECK(ds.basis_repair == d.basis_repair);
+        CHECK(ds.basis_repair_max_rounds == d.basis_repair_max_rounds);
+        CHECK(ds.basis_repair_radius == d.basis_repair_radius);
     }
     const auto o = NonsmoothNewton::Options::from_json(json{{"NonsmoothNewton", {{"max_inner", 20}, {"handoff", "first"}, {"resolution", false}, {"guard", {{"c", 3.0}}}, {"hand_back", {{"enabled", true}, {"energy", 50.0}}}, {"jacobian", {{"bound", 0.5}}}, {"debug", {{"dedupe", false}}}}}});
     CHECK(o.max_inner == 20);
@@ -218,6 +245,39 @@ TEST_CASE("nonsmooth-newton-options", "[solver][nonsmooth]")
     CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"jacobian", {{"bound", 1.0}}}})));
     CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"jacobian", {{"bound", -0.1}}}})));
     CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"jacobian", {{"floor", -1.0}}}})));
+    CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"selection", "sparse"}})));
+    // the method parts: on, off and auto; auto is the selection's choice
+    CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"first_layer", {{"enabled", "maybe"}}}})));
+    CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"first_layer", {{"events", {"sideways"}}}}})));
+    CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"first_layer", {{"lift_model", "frozen"}, {"lift_basis", "raw"}}}})));
+    {
+        const auto on = NonsmoothNewton::Options::from_json(bad({{"reread", {{"enabled", "on"}}}, {"first_layer", {{"events", {"ftb", "ccd"}}}}}));
+        CHECK(on.reread_on());
+        CHECK(!on.first_layer_on());
+        CHECK(on.first_layer_events == 12u);
+        const auto blind = NonsmoothNewton::Options::from_json(bad({{"selection", "blind"}}));
+        CHECK(blind.reread_on());
+        CHECK(blind.first_layer_on());
+        CHECK(blind.path_always_on());
+        CHECK(blind.handoff_gate_on());
+        CHECK(blind.exact_gate_on());
+        CHECK(!NonsmoothNewton::Options::from_json(bad({{"selection", "blind"}, {"reread", {{"enabled", "off"}}}})).reread_on());
+    }
+    CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"reduced_matrix", {{"mode", "merged"}}}})));
+    CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"basis_repair", {{"mode", "r_ad"}}}})));
+    CHECK_THROWS(NonsmoothNewton::Options::from_json(bad({{"path", {{"always", "yes"}}}})));
+    CHECK(NonsmoothNewton::Options::from_json(bad({{"selection", "blind"}})).selection == "blind");
+}
+
+TEST_CASE("nonsmooth-newton-selection", "[solver][nonsmooth]")
+{
+    static std::shared_ptr<spdlog::logger> logger = spdlog::stdout_color_mt("nonsmooth-newton-selection-logger");
+    logger->set_level(spdlog::level::off);
+    const json linear_solver_params = R"({"solver": "Eigen::SimplicialLLT"})"_json;
+    // the energy split is the default selection
+    CHECK_NOTHROW(Solver::create(R"({"solver": "NonsmoothNewton"})"_json, linear_solver_params, 1, *logger));
+    CHECK_NOTHROW(Solver::create(R"({"solver": "NonsmoothNewton", "NonsmoothNewton": {"selection": "energy_split"}})"_json, linear_solver_params, 1, *logger));
+    CHECK_NOTHROW(Solver::create(R"({"solver": "NonsmoothNewton", "NonsmoothNewton": {"selection": "blind"}})"_json, linear_solver_params, 1, *logger));
 }
 
 TEST_CASE("nonsmooth-newton-log-term", "[solver][nonsmooth]")
@@ -824,4 +884,134 @@ TEST_CASE("nonsmooth-newton-parallel-kernels", "[solver][nonsmooth]")
         });
         CHECK(std::all_of(seen.begin(), seen.end(), [](const int v) { return v == 1; }));
     }
+}
+
+TEST_CASE("nonsmooth-newton-reread", "[solver][nonsmooth]")
+{
+    // the re-read of the true gradient at the inner points: the solve converges; path/always takes the path at every iteration
+    static std::shared_ptr<spdlog::logger> logger = spdlog::stdout_color_mt("nonsmooth-newton-reread-logger");
+    logger->set_level(spdlog::level::warn);
+#ifdef POLYSOLVE_WITH_CHOLMOD
+    const json linear_solver_params = R"({"solver": "Eigen::CholmodSupernodalLLT"})"_json;
+#else
+    const json linear_solver_params = R"({"solver": "Eigen::SimplicialLLT"})"_json;
+#endif
+    json params = R"({"solver": "NonsmoothNewton", "max_iterations": 100, "grad_norm_tol": 1e-10,
+                      "NonsmoothNewton": {"handoff": "off", "reread": {"enabled": "on"}, "path": {"always": "on"}}})"_json;
+    auto solver = Solver::create(params, linear_solver_params, 1, *logger);
+    LogTermProblem p(4);
+    Problem::TVector x = Problem::TVector::LinSpaced(4, 0.5, 2.0);
+    solver->minimize(p, x);
+    Problem::TVector g;
+    p.gradient(x, g);
+    CHECK(g.norm() < 1e-8);
+    CHECK(x.maxCoeff() < LogTermProblem::dhat);
+    const json &s = solver->info()["NonsmoothNewton"];
+    CHECK(s["reread_calls"].get<long>() > 0);
+}
+
+namespace
+{
+    /// A first layer that promotes nothing real: it reports one unit for the first events and gives an empty change of the model
+    class CountingFirstLayer : public FirstLayerPort
+    {
+    public:
+        int identify(const LimitEvent &event) override
+        {
+            ++events;
+            if (!event.promote || given >= 3)
+                return 0;
+            ++given;
+            pending = true;
+            return 1;
+        }
+        bool take_delta(const Problem::TVector &x, const bool, NonsmoothDelta &delta) override
+        {
+            if (!pending)
+                return false;
+            pending = false;
+            delta.dH.resize(x.size(), x.size());
+            delta.dg = Problem::TVector::Zero(x.size());
+            delta.dE = 0;
+            delta.n = 1;
+            return true;
+        }
+        int events = 0, given = 0;
+        bool pending = false;
+    };
+
+    class FirstLayerProblem : public LogTermProblem
+    {
+    public:
+        using LogTermProblem::LogTermProblem;
+        FirstLayerPort *nonsmooth_first_layer() override { return &port; }
+        CountingFirstLayer port;
+    };
+} // namespace
+
+TEST_CASE("nonsmooth-newton-first-layer", "[solver][nonsmooth]")
+{
+    // a limiter that cuts an inner step asks the first layer; units that it promotes are taken into the model in place and the
+    // polyline restarts at the current point, at most first_layer/max_rounds times
+    static std::shared_ptr<spdlog::logger> logger = spdlog::stdout_color_mt("nonsmooth-newton-first-layer-logger");
+    logger->set_level(spdlog::level::warn);
+#ifdef POLYSOLVE_WITH_CHOLMOD
+    const json linear_solver_params = R"({"solver": "Eigen::CholmodSupernodalLLT"})"_json;
+#else
+    const json linear_solver_params = R"({"solver": "Eigen::SimplicialLLT"})"_json;
+#endif
+    json params = R"({"solver": "NonsmoothNewton", "max_iterations": 100, "grad_norm_tol": 1e-10,
+                      "NonsmoothNewton": {"handoff": "off", "first_layer": {"enabled": "on"}, "reread": {"enabled": "on"}}})"_json;
+    auto solver = Solver::create(params, linear_solver_params, 1, *logger);
+    FirstLayerProblem p(4);
+    Problem::TVector x = Problem::TVector::LinSpaced(4, 0.5, 2.0);
+    solver->minimize(p, x);
+    Problem::TVector g;
+    p.gradient(x, g);
+    CHECK(g.norm() < 1e-8);
+    CHECK(x.maxCoeff() < LogTermProblem::dhat);
+    const json &s = solver->info()["NonsmoothNewton"];
+    CHECK(p.port.events > 0);
+    CHECK(s["ev_promotions"].get<long>() == p.port.given);
+    CHECK(s["ev_promotions"].get<long>() > 0);
+    CHECK(s["reread_after_promotion"].get<long>() == s["ev_promotions"].get<long>());
+    CHECK(s["restart_cont_n"].get<long>() == s["ev_promotions"].get<long>());
+    // without the port of the problem the first layer is silently off (a phase without it)
+    auto solver1 = Solver::create(params, linear_solver_params, 1, *logger);
+    LogTermProblem q(4);
+    Problem::TVector y = Problem::TVector::LinSpaced(4, 0.5, 2.0);
+    solver1->minimize(q, y);
+    CHECK(solver1->info()["NonsmoothNewton"]["ev_promotions"].get<long>() == 0);
+}
+
+TEST_CASE("nonsmooth-newton-jgate", "[solver][nonsmooth]")
+{
+    // Jg: a limit that ended a path pays if the next outer iteration of the solve has no limit event; the score is the sum of the
+    // last window outcomes; a negative score switches the limit off for the exact units
+    JGate g;
+    g.window = 3;
+    CHECK(g.enabled);
+    CHECK(g.want() == 1);
+    // an end followed by an outer iteration with a limit event does not pay: the score is -1 and the limit is off
+    g.outer_end(false, true);
+    CHECK(g.pending);
+    g.outer_end(true, false);
+    CHECK(g.score() == -1);
+    CHECK(!g.enabled);
+    CHECK(g.want() == 0);
+    // another end that does not pay: -2
+    g.outer_end(false, true);
+    g.outer_end(true, false);
+    CHECK(g.score() == -2);
+    // an end followed by a quiet outer iteration pays; the window of 3 keeps [-1, -1, +1]
+    g.outer_end(false, true);
+    g.outer_end(false, false);
+    CHECK(g.score() == -1);
+    CHECK(!g.enabled);
+    // an end whose solve ends pays; [-1, +1, +1] switches the limit on again
+    g.outer_end(false, true);
+    g.solve_start();
+    CHECK(g.applied == -1);
+    CHECK(g.score() == 1);
+    CHECK(g.enabled);
 }

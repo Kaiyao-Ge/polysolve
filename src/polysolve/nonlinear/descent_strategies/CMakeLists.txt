@@ -12,6 +12,18 @@ set(SOURCES
 	Newton.cpp
 	NonsmoothNewton.hpp
 	NonsmoothNewton.cpp
+	NonsmoothNewtonBase.hpp
+	NonsmoothNewtonBase.cpp
+	BlindNewton.hpp
+	BlindNewton.cpp
+	nonsmooth/BasisMatrix.hpp
+	nonsmooth/BasisMatrix.cpp
+	nonsmooth/SubspaceModel.hpp
+	nonsmooth/SubspaceModel.cpp
+	nonsmooth/ReducedMatrix.hpp
+	nonsmooth/ReducedMatrix.cpp
+	nonsmooth/PathRunner.hpp
+	nonsmooth/PathRunner.cpp
 	ParallelKernels.hpp
 	ParallelKernels.cpp
 )

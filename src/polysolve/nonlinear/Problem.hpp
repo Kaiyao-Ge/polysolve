@@ -31,6 +31,11 @@ namespace polysolve::nonlinear
         Eigen::Matrix<double, max_size, max_size, Eigen::DontAlign> H;
     };
 
+    class FirstLayerPort;
+    class SelectionPort;
+    class BasisPort;
+    class LogPort;
+
     /// @brief Class defining optimization problem to be solved. To be defined by user code
     class Problem
     {
@@ -246,6 +251,16 @@ namespace polysolve::nonlinear
 
         /// @brief End of the segment started by nonsmooth_segment_begin.
         virtual void nonsmooth_segment_end() { line_search_end(); }
+
+        /// @brief Optional ports of the nonsmooth term (NonsmoothPorts.hpp); none by default. The strategy asks for them
+        /// only when it uses the function they serve.
+        virtual FirstLayerPort *nonsmooth_first_layer() { return nullptr; }
+        virtual SelectionPort *nonsmooth_selection() { return nullptr; }
+        virtual BasisPort *nonsmooth_basis() { return nullptr; }
+        virtual LogPort *nonsmooth_log() { return nullptr; }
+
+        /// @brief The solver accepted the step x0 -> x1 (called after the update of the solution).
+        virtual void nonsmooth_step_accepted(const TVector &x0, const TVector &x1) {}
 
         /// --- Misc ----------------------------------------------------------
 
